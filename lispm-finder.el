@@ -197,9 +197,11 @@ Returns non-nil when dropped on the Trash.")
 
 (defvar lispm-finder-item-map)
 
+(cl-pushnew 'lispm-finder-target lispm-ui-target-properties)
+
 (defun lispm-finder--target-plist (target)
   "Return text properties identifying press TARGET."
-  (let ((props (list 'lispm-finder-target target)))
+  (let ((props (list 'lispm-ui-target target 'lispm-finder-target target)))
     (dolist (prop lispm-finder-extra-target-properties props)
       (setq props (plist-put props prop target)))))
 
@@ -347,45 +349,31 @@ When TRAILING-PAD is non-nil, include 6px trailing margin."
 
 (defun lispm-finder--press-target (position)
   "Return the press target at POSITION."
-  (when-let* ((string (posn-string position)))
-    (or (get-text-property (cdr string) 'lispm-finder-target (car string))
-        (seq-some (lambda (prop)
-                    (get-text-property (cdr string) prop (car string)))
-                  lispm-finder-extra-target-properties))))
+  (let ((lispm-ui-target-properties
+         (append '(lispm-ui-target lispm-finder-target)
+                 lispm-finder-extra-target-properties
+                 lispm-ui-target-properties)))
+    (lispm-ui-press-target position)))
 
 (defun lispm-finder--same-target-p (position)
   "Return a predicate true of positions on the same target as POSITION."
-  (let ((window (posn-window position))
-        (area (posn-area position))
-        (target (lispm-finder--press-target position)))
-    (lambda (release)
-      (and (eq (posn-window release) window)
-           (eq (posn-area release) area)
-           (equal (lispm-finder--press-target release) target)))))
+  (let ((lispm-ui-target-properties
+         (append '(lispm-ui-target lispm-finder-target)
+                 lispm-finder-extra-target-properties
+                 lispm-ui-target-properties)))
+    (lispm-ui-same-target-p position)))
 
-(defun lispm-finder--pressed-p (target)
-  "Return non-nil while TARGET is held down in the selected window."
-  (equal (window-parameter (selected-window) 'lispm-ui-pressed) target))
+(defalias 'lispm-finder--pressed-p #'lispm-ui-pressed-p)
 
 (defun lispm-finder--press (position pressed-p command)
   "Hold a button down from POSITION until mouse release; run COMMAND if on target."
   (if lispm-finder-press-function
       (funcall lispm-finder-press-function position pressed-p command)
-    (let ((window (posn-window position))
-          (target (lispm-finder--press-target position)))
-      (set-window-parameter window 'lispm-ui-pressed target)
-      (with-current-buffer (window-buffer window) (force-mode-line-update))
-      (redisplay t)
-      (let ((release (let ((echo-keystrokes 0)) (lispm-ui-modal-read-event))))
-        (while (memq release lispm-ui-modal-areas)
-          (setq release (let ((echo-keystrokes 0)) (lispm-ui-modal-read-event))))
-        (set-window-parameter window 'lispm-ui-pressed nil)
-        (with-current-buffer (window-buffer window) (force-mode-line-update))
-        (when (and (consp release)
-                   (eq (event-basic-type release) 'mouse-1)
-                   (funcall pressed-p (event-end release)))
-          (let ((lispm-ui-in-gui-action t))
-            (funcall command)))))))
+    (let ((lispm-ui-target-properties
+           (append '(lispm-ui-target lispm-finder-target)
+                   lispm-finder-extra-target-properties
+                   lispm-ui-target-properties)))
+      (lispm-ui-press position pressed-p command))))
 
 ;;;; Items
 
@@ -520,7 +508,8 @@ files must satisfy it."
 (defvar-keymap lispm-finder--up-button-map
   :doc "Keymap of the button going to the enclosing folder."
   "<header-line> <down-mouse-1>" #'lispm-finder--press-up
-  "<header-line> <mouse-1>" #'ignore)
+  "<header-line> <mouse-1>" #'ignore
+  "<header-line> <drag-mouse-1>" #'ignore)
 
 (defun lispm-finder--up-label ()
   "Return what the button going to the enclosing folder reads."
@@ -1116,11 +1105,17 @@ with LABEL its name under it; nil where it is not."
   "C-g" #'lispm-finder-deselect
   "<remap> <self-insert-command>" #'lispm-finder-type-select)
 
+(defvar evil-emacs-state-cursor)
+(defvar evil-normal-state-cursor)
+
 (define-derived-mode lispm-finder-mode special-mode "Finder"
   "Major mode of the Finder window: a folder's items as large icons.
 \\{lispm-finder-mode-map}"
   (setq-local header-line-format '(:eval (lispm-finder--header))
               cursor-type nil
+              cursor-in-non-selected-windows nil
+              evil-emacs-state-cursor '(nil)
+              evil-normal-state-cursor '(nil)
               truncate-lines t
               left-fringe-width 0
               right-fringe-width 0
@@ -1187,7 +1182,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
 (defconst lispm-finder-choose-default-height 380
   "Default height in pixels of the modal Finder chooser window.")
 
-(defconst lispm-finder--choose-footer-height 40
+(defconst lispm-finder--choose-footer-height 44
   "Height in pixels of the modal Finder chooser's bottom action bar.")
 
 (defconst lispm-finder--path-target '(header-line lispm-finder-choose-path-menu)
@@ -1265,7 +1260,8 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
 (defvar-keymap lispm-finder--path-button-map
   :doc "Keymap of the path/places button in the chooser header."
   "<header-line> <down-mouse-1>" #'lispm-finder--press-path
-  "<header-line> <mouse-1>" #'ignore)
+  "<header-line> <mouse-1>" #'ignore
+  "<header-line> <drag-mouse-1>" #'ignore)
 
 (defun lispm-finder--press-new-folder (event)
   "Run `lispm-finder-new-folder' when the New Folder header button is pressed."
@@ -1277,7 +1273,8 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
 (defvar-keymap lispm-finder--new-folder-button-map
   :doc "Keymap of the New Folder button in the chooser header."
   "<header-line> <down-mouse-1>" #'lispm-finder--press-new-folder
-  "<header-line> <mouse-1>" #'ignore)
+  "<header-line> <mouse-1>" #'ignore
+  "<header-line> <drag-mouse-1>" #'ignore)
 
 (defun lispm-finder--choose-header ()
   "Return the header line of the modal Finder chooser."
@@ -1337,7 +1334,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
          (w (max 1 width))
          (svg (svg-create w h))
          (btn-w (max 68 (lispm-ui-push-button-width label)))
-         (btn-y (/ (- h lispm-ui-button-height) 2))
+         (btn-y 8)
          (btn-x (if default 4 2)))
     (lispm-finder--draw-footer-ground svg w h palette)
     (lispm-ui-svg-push-button svg btn-x btn-y palette label btn-w
@@ -1348,7 +1345,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
 (cl-defun lispm-finder--footer-button-slice (label target action &key default enabled trailing)
   "Return a propertized mode-line button slice for LABEL."
   (let* ((btn-w (max 68 (lispm-ui-push-button-width label)))
-         (slice-w (+ btn-w (if default 8 4) (if trailing 10 4)))
+         (slice-w (+ btn-w (if default 8 4) (if trailing 16 4)))
          (state (cond ((not enabled) 'disabled)
                       ((lispm-finder--pressed-p target) 'pressed)
                       (t nil)))
@@ -1361,6 +1358,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
                                   (lispm-finder--press start (lispm-finder--same-target-p start)
                                                        action)))))
                 (keymap-set m "<mode-line> <mouse-1>" #'ignore)
+                (keymap-set m "<mode-line> <drag-mouse-1>" #'ignore)
                 m)))
     (cons slice-w
           (if (lispm-finder--tty-p)
