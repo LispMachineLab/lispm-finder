@@ -367,36 +367,25 @@ When TRAILING-PAD is non-nil, include 6px trailing margin."
   "Return non-nil while TARGET is held down in the selected window."
   (equal (window-parameter (selected-window) 'lispm-ui-pressed) target))
 
-(defun lispm-finder--press (start pressed-p command)
-  "Track a mouse press from START while PRESSED-P holds; run COMMAND on release."
-  (let* ((window (posn-window start))
-         (target (lispm-finder--press-target start))
-         (release nil))
-    (when (window-live-p window)
-      (unwind-protect
-          (track-mouse
-            (while (not release)
-              (let ((next (if (funcall pressed-p (or release start)) target 'outside)))
-                (unless (equal (window-parameter window 'lispm-ui-pressed) next)
-                  (set-window-parameter window 'lispm-ui-pressed next)
-                  (with-current-buffer (window-buffer window)
-                    (force-mode-line-update))
-                  (redisplay t)))
-              (let ((event (lispm-ui-modal-read)))
-                (cond ((mouse-movement-p event)
-                       (setq start (event-end event)))
-                      ((or (lispm-ui-modal-mouse-up-p event)
-                           (not (mouse-event-p event)))
-                       (setq release event))))))
-        (when (window-live-p window)
-          (set-window-parameter window 'lispm-ui-pressed nil)
-          (with-current-buffer (window-buffer window)
-            (force-mode-line-update))))
-      (when (and (consp release)
-                 (eq (event-basic-type release) 'mouse-1)
-                 (funcall pressed-p (event-end release)))
-        (let ((lispm-ui-in-gui-action t))
-          (funcall command))))))
+(defun lispm-finder--press (position pressed-p command)
+  "Hold a button down from POSITION until mouse release; run COMMAND if on target."
+  (if lispm-finder-press-function
+      (funcall lispm-finder-press-function position pressed-p command)
+    (let ((window (posn-window position))
+          (target (lispm-finder--press-target position)))
+      (set-window-parameter window 'lispm-ui-pressed target)
+      (with-current-buffer (window-buffer window) (force-mode-line-update))
+      (redisplay t)
+      (let ((release (let ((echo-keystrokes 0)) (lispm-ui-modal-read-event))))
+        (while (memq release lispm-ui-modal-areas)
+          (setq release (let ((echo-keystrokes 0)) (lispm-ui-modal-read-event))))
+        (set-window-parameter window 'lispm-ui-pressed nil)
+        (with-current-buffer (window-buffer window) (force-mode-line-update))
+        (when (and (consp release)
+                   (eq (event-basic-type release) 'mouse-1)
+                   (funcall pressed-p (event-end release)))
+          (let ((lispm-ui-in-gui-action t))
+            (funcall command)))))))
 
 ;;;; Items
 
@@ -782,7 +771,10 @@ PROPS returns the text properties of an item, by name.  Return the columns."
   (interactive)
   (lispm-finder--in
     (when-let* ((parent (lispm-finder--parent lispm-finder--directory)))
-      (lispm-finder--go parent t (lispm-finder--title lispm-finder--directory)))))
+      (lispm-finder--go parent t
+                        (unless (and lispm-finder--choosing
+                                     (lispm-finder--directory-only-p))
+                          (lispm-finder--title lispm-finder--directory))))))
 
 (defun lispm-finder-refresh ()
   "Read the folder again."
