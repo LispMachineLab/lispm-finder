@@ -1,0 +1,25 @@
+#+TITLE: lispm-finder — Classic Finder File Manager & Chooser for Emacs
+
+=lispm-finder= provides a classic Mac OS 9 / Platinum-styled spatial icon-grid
+Finder file manager and modal file/directory chooser for GNU Emacs, built on
+=lispm-kit= and =lispm-ui=.
+
+** Features
+
+- *Spatial 32×32 Icon Grid View* (=lispm-finder=, =lispm-finder-open-directory=,
+  =lispm-finder-home=):
+  - Multi-column icon grid with type-specific SVG icons, alias badges, and
+    2-line wrapped labels
+  - Enclosing folder button, item count & free disk space header strip
+  - Keyboard navigation (arrow keys, type-ahead selection, =RET= / =o= to open,
+    =DEL= / =^= to go up, =n= for New Folder, =r= to rename, =d= to move to Trash)
+  - Mouse click, double-click, drag-and-drop onto folders, and right-click
+    context menus
+- *Modal File & Folder Chooser* (=lispm-finder-choose-file=,
+  =lispm-finder-choose-directory=):
+  - Reuses the same Finder icon-grid view in a floating modal window
+  - Top path/places popup button, =New Folder…= button, and pinned bottom
+    =Open= / =Cancel= / =Choose= action bar
+  - Plugs directly into =lispm-ui-choose-file-function= so =lispm-ui-form=
+    =file= / =directory= fields and =lispm-agent= session folder pickers
+    automatically open the Finder chooser.
