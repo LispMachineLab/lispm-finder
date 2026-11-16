@@ -4,7 +4,7 @@
 
 ;; Author: Ryan.K
 ;; URL: https://github.com/LispMachineLab/lispm-finder
-;; Version: 0.1.0
+;; Version: 0.1.1
 ;; Package-Requires: ((emacs "30.1") (lispm-kit "0.1.0") (lispm-ui "0.1.0"))
 ;; Keywords: files, convenience
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -906,8 +906,16 @@ PROPS returns the text properties of an item, by name.  Return the columns."
       (user-error (lispm-finder-tr "Nothing can be made or renamed in “%s”") (or name "")))
     trimmed))
 
-(defvar lispm-ui--intercepting)
+(defvar lispm-ui-intercepting nil)
+(defvar lispm-ui--intercepting nil)
 (declare-function lispm-ui-form-prompt "lispm-ui-form" (prompt &rest args))
+(declare-function lispm-ui-choose-file-in-minibuffer "lispm-ui-ask" (title file directory predicate))
+(declare-function lispm-ui-choose-remember "lispm-ui-file-dialog" (file))
+
+(defun lispm-finder-directory (&optional buffer)
+  "Return the directory or virtual folder key shown in BUFFER."
+  (with-current-buffer (or buffer (lispm-finder--buffer))
+    lispm-finder--directory))
 
 (defun lispm-finder--read-string (prompt &optional initial)
   "Read a string with PROMPT and INITIAL input, using a modal form in GUI Finder."
@@ -916,7 +924,8 @@ PROPS returns the text properties of an item, by name.  Return the columns."
            (lispm-ui-popup-available-p)
            (or lispm-finder--choosing (lispm-ui-gui-action-p)))
       (lispm-ui-form-prompt prompt :initial initial)
-    (let ((lispm-ui--intercepting nil))
+    (let ((lispm-ui-intercepting nil)
+          (lispm-ui--intercepting nil))
       (read-string prompt initial))))
 
 (defun lispm-finder-new-folder (name)
@@ -1606,25 +1615,29 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
   "Confirm the current selection in the modal Finder chooser."
   (interactive)
   (lispm-finder--in
-    (let ((item (lispm-finder--selected-item)))
-      (cond
-       ((and (not (lispm-finder--directory-only-p)) item (cdr item))
-        (lispm-finder--go (lispm-finder--child-path (car item) lispm-finder--directory) t))
-       (t
-        (when-let* ((target (lispm-finder--choose-target-path)))
-          (setq lispm-finder--choose-result target)
-          (when (and lispm-finder--choose-depth
-                     (> (recursion-depth) lispm-finder--choose-depth))
-            (exit-recursive-edit))))))))
+    (when (or (null lispm-finder--choose-depth)
+              (<= (recursion-depth) (1+ lispm-finder--choose-depth)))
+      (let ((item (lispm-finder--selected-item)))
+        (cond
+         ((and (not (lispm-finder--directory-only-p)) item (cdr item))
+          (lispm-finder--go (lispm-finder--child-path (car item) lispm-finder--directory) t))
+         (t
+          (when-let* ((target (lispm-finder--choose-target-path)))
+            (setq lispm-finder--choose-result target)
+            (when (and lispm-finder--choose-depth
+                       (= (recursion-depth) (1+ lispm-finder--choose-depth)))
+              (exit-recursive-edit)))))))))
 
 (defun lispm-finder-choose-cancel ()
   "Cancel the modal Finder chooser."
   (interactive)
   (lispm-finder--in
-    (setq lispm-finder--choose-result 'cancel)
-    (when (and lispm-finder--choose-depth
-               (> (recursion-depth) lispm-finder--choose-depth))
-      (exit-recursive-edit))))
+    (when (or (null lispm-finder--choose-depth)
+              (<= (recursion-depth) (1+ lispm-finder--choose-depth)))
+      (setq lispm-finder--choose-result 'cancel)
+      (when (and lispm-finder--choose-depth
+                 (= (recursion-depth) (1+ lispm-finder--choose-depth)))
+        (exit-recursive-edit)))))
 
 (defun lispm-finder-choose-go-home ()
   "Navigate to the user's home directory in the modal chooser."
@@ -1751,9 +1764,12 @@ graphic display with a palette, falls back to the minibuffer."
          (initial-select (and file (not (string-empty-p (file-name-nondirectory file)))
                               (file-name-nondirectory file))))
     (if (not (lispm-ui-popup-graphic-p))
-        (lispm-ui--choose-file-in-minibuffer title file directory predicate)
+        (if (fboundp 'lispm-ui-choose-file-in-minibuffer)
+            (lispm-ui-choose-file-in-minibuffer title file directory predicate)
+          (lispm-ui--choose-file-in-minibuffer title file directory predicate))
       (let ((buffer nil)
             (cleanup nil)
+            (closing nil)
             (result nil))
         (unwind-protect
             (progn
@@ -1771,6 +1787,14 @@ graphic display with a palette, falls back to the minibuffer."
                       lispm-finder--choose-depth (recursion-depth)
                       lispm-finder--back nil
                       lispm-finder--forward nil)
+                (add-hook 'kill-buffer-hook
+                          (lambda ()
+                            (unless closing
+                              (setq lispm-finder--choose-result 'cancel)
+                              (when (and lispm-finder--choose-depth
+                                         (= (recursion-depth) (1+ lispm-finder--choose-depth)))
+                                (exit-recursive-edit))))
+                          nil t)
                 (lispm-finder--go directory nil initial-select))
               (setq cleanup
                     (funcall (or lispm-finder-modal-show-function
@@ -1787,15 +1811,25 @@ graphic display with a palette, falls back to the minibuffer."
                   (quit nil)))
               (when (buffer-live-p buffer)
                 (setq result (buffer-local-value 'lispm-finder--choose-result buffer))))
+          (setq closing t)
           (when (functionp cleanup)
             (ignore-errors (funcall cleanup)))
           (when (buffer-live-p buffer)
             (kill-buffer buffer)))
         (and (stringp result)
              (progn
-               (when (and (not dir-only) (fboundp 'lispm-ui-file-dialog--remember))
-                 (lispm-ui-file-dialog--remember result))
+               (when (not dir-only)
+                 (cond ((fboundp 'lispm-ui-choose-remember)
+                        (lispm-ui-choose-remember result))
+                       ((fboundp 'lispm-ui-file-dialog--remember)
+                        (lispm-ui-file-dialog--remember result))))
                result))))))
+
+(defalias 'lispm-finder-path-items #'lispm-finder--path-items)
+(defalias 'lispm-finder-keyboard-menu #'lispm-finder--keyboard-menu)
+(defalias 'lispm-finder-choose-header #'lispm-finder--choose-header)
+(defalias 'lispm-finder-choose-footer #'lispm-finder--choose-footer)
+(defalias 'lispm-finder-modal-show-default #'lispm-finder--modal-show-default)
 
 ;;;###autoload
 (cl-defun lispm-finder-choose-directory (&key title directory)
