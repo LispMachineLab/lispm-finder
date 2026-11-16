@@ -327,7 +327,9 @@ When TRAILING-PAD is non-nil, include trailing margin."
 (defun lispm-finder-draw-header-button (palette label &optional state trailing-pad)
   "Return an SVG of a header strip bevel button reading LABEL in PALETTE."
   (let* ((pad-right (if trailing-pad 6 0))
-         (width (lispm-finder-header-button-width label trailing-pad))
+         (width (+ 6 (lispm-ui-text-width label 'lispm-ui-small)
+                   (* 2 lispm-ui-bevel-padding)
+                   pad-right))
          (svg (svg-create width lispm-finder-header-strip-height)))
     (lispm-finder--draw-header-ground svg width palette)
     (lispm-ui-svg-bevel-button svg 6 2 palette (- width 6 pad-right)
@@ -366,7 +368,8 @@ When TRAILING-PAD is non-nil, include trailing margin."
           (area (posn-area position))
           (target (lispm-ui-press-target position)))
       (lambda (release)
-        (and (eq (posn-window release) window)
+        (and target
+             (eq (posn-window release) window)
              (eq (posn-area release) area)
              (equal (lispm-ui-press-target release) target))))))
 
@@ -386,7 +389,8 @@ When TRAILING-PAD is non-nil, include trailing margin."
         (when (unwind-protect
                   (lispm-ui-modal-hold
                    (lambda (event)
-                     (let ((over (funcall pressed-p (event-end event))))
+                     (let ((over (and (window-live-p window)
+                                      (funcall pressed-p (event-end event)))))
                        (when (lispm-ui-modal-mouse-up-p event)
                          (setq holding nil))
                        over))
@@ -400,11 +404,10 @@ When TRAILING-PAD is non-nil, include trailing margin."
                   (set-window-parameter window 'lispm-ui-pressed nil)
                   (with-current-buffer (window-buffer window)
                     (force-mode-line-update))))
-          (let ((lispm-ui-in-gui-action t))
-            (if (window-live-p window)
-                (with-selected-window window
-                  (funcall command))
-              (funcall command))))))))
+          (when (window-live-p window)
+            (let ((lispm-ui-in-gui-action t))
+              (with-selected-window window
+                (funcall command)))))))))
 
 (defun lispm-finder--press-target (position)
   "Return the press target at POSITION."
@@ -426,14 +429,11 @@ When TRAILING-PAD is non-nil, include trailing margin."
 
 (defun lispm-finder--press (position pressed-p command)
   "Hold a button down from POSITION until mouse release; run COMMAND if on target."
-  (let ((win (posn-window position))
-        (wrapped (lambda ()
+  (let ((wrapped (lambda ()
                    (let ((w (posn-window position)))
-                     (if (window-live-p w)
-                         (with-selected-window w
-                           (funcall command))
-                       (funcall command))))))
-    (ignore win)
+                     (when (window-live-p w)
+                       (with-selected-window w
+                         (funcall command)))))))
     (if lispm-finder-press-function
         (funcall lispm-finder-press-function position pressed-p wrapped)
       (let ((lispm-ui-target-properties
@@ -464,6 +464,10 @@ by default \"Move to Trash\".  Nothing is made or renamed in such a folder.")
   "Return the items of DIRECTORY, one of `lispm-finder-folders'."
   (funcall (plist-get (lispm-finder--folder directory) :items)))
 
+(defun lispm-finder--child-path (name directory)
+  "Return the path of child entry NAME inside DIRECTORY without `~' expansion."
+  (expand-file-name (concat "./" name) directory))
+
 (defun lispm-finder--read (directory &optional predicate)
   "Return DIRECTORY's items by name, hidden ones left out.
 An item of a directory on disk is (NAME . FOLDER-P); an item of a folder
@@ -476,7 +480,7 @@ files must satisfy it."
                       (lispm-finder--folder-items directory))
             (delq nil
                   (mapcar (lambda (name)
-                            (let* ((full (expand-file-name name directory))
+                            (let* ((full (lispm-finder--child-path name directory))
                                    (dir-p (file-directory-p full)))
                               (when (or dir-p (null pred) (funcall pred full))
                                 (cons name dir-p))))
@@ -491,9 +495,9 @@ files must satisfy it."
 
 (defun lispm-finder--file-icon-name (directory item)
   "Return the name of the large icon of ITEM of DIRECTORY, a directory."
-  (let ((path (expand-file-name (car item) directory)))
+  (let ((path (lispm-finder--child-path (car item) directory)))
     (if (cdr item)
-        (if (file-exists-p (expand-file-name ".git" path)) "folder-git-32" "folder-32")
+        (if (file-exists-p (lispm-finder--child-path ".git" path)) "folder-git-32" "folder-32")
       (let* ((name (concat (lispm-ui-file-icon-name path) "-32"))
              (file (lispm-ui-icon-file name)))
         (if (and file (file-exists-p file)) name "document-32")))))
@@ -570,9 +574,8 @@ files must satisfy it."
   "Hold the button EVENT pressed, going to the enclosing folder if released on it."
   (interactive "e")
   (let ((start (event-start event)))
-    (funcall (or lispm-finder-press-function #'lispm-finder--press)
-             start (lispm-finder--same-target-p start)
-             #'lispm-finder-up)))
+    (lispm-finder--press start (lispm-finder--same-target-p start)
+                         #'lispm-finder-up)))
 
 (defvar-keymap lispm-finder--up-button-map
   :doc "Keymap of the button going to the enclosing folder."
@@ -802,18 +805,21 @@ PROPS returns the text properties of an item, by name.  Return the columns."
 (defun lispm-finder--go (directory &optional record select)
   "Show DIRECTORY, with SELECT selected; RECORD keeps the folder left in history."
   (lispm-finder--in
-    (when (and record lispm-finder--directory)
-      (push lispm-finder--directory lispm-finder--back)
-      (setq lispm-finder--forward nil))
-    (setq lispm-finder--directory (if (lispm-finder--folder directory)
-                                      directory
-                                    (file-name-as-directory (expand-file-name directory)))
-          lispm-finder--items (lispm-finder--read lispm-finder--directory)
-          lispm-finder--selected select
-          lispm-finder--selected-app (lispm-finder--app select))
-    (when (stringp lispm-finder--directory)
-      (setq default-directory lispm-finder--directory))
-    (lispm-finder--call-render)))
+    (let* ((target-dir (if (lispm-finder--folder directory)
+                           directory
+                         (file-name-as-directory (expand-file-name directory))))
+           (items (lispm-finder--read target-dir))
+           (valid-select (and select (car (assoc select items)))))
+      (when (and record lispm-finder--directory)
+        (push lispm-finder--directory lispm-finder--back)
+        (setq lispm-finder--forward nil))
+      (setq lispm-finder--directory target-dir
+            lispm-finder--items items
+            lispm-finder--selected valid-select
+            lispm-finder--selected-app (lispm-finder--app valid-select))
+      (when (stringp lispm-finder--directory)
+        (setq default-directory lispm-finder--directory))
+      (lispm-finder--call-render))))
 
 (defun lispm-finder-back ()
   "Show the folder shown before this one."
@@ -876,7 +882,7 @@ PROPS returns the text properties of an item, by name.  Return the columns."
         (when-let* ((name lispm-finder--selected))
           (if (lispm-finder--folder lispm-finder--directory)
               (setq action (nth 2 (assoc name (lispm-finder--folder-items lispm-finder--directory))))
-            (let ((path (expand-file-name name lispm-finder--directory)))
+            (let ((path (lispm-finder--child-path name lispm-finder--directory)))
               (if (file-directory-p path)
                   (lispm-finder--go path t)
                 (lispm-finder--edit path))))))
@@ -896,7 +902,7 @@ PROPS returns the text properties of an item, by name.  Return the columns."
               (string-empty-p trimmed)
               (member trimmed '("." ".."))
               (string-match-p "[/\\]" trimmed))
-      (user-error "Invalid item name: %s" (or name "")))
+      (user-error (lispm-finder-tr "Nothing can be made or renamed in “%s”") (or name "")))
     trimmed))
 
 (defun lispm-finder-new-folder (name)
@@ -907,7 +913,7 @@ PROPS returns the text properties of an item, by name.  Return the columns."
   (lispm-finder--real-only)
   (let ((clean (lispm-finder--validate-item-name name)))
     (lispm-finder--in
-      (let ((path (expand-file-name clean lispm-finder--directory)))
+      (let ((path (lispm-finder--child-path clean lispm-finder--directory)))
         (when (file-exists-p path)
           (user-error (lispm-finder-tr "There is already an item called “%s” here") clean))
         (make-directory path)
@@ -918,7 +924,7 @@ PROPS returns the text properties of an item, by name.  Return the columns."
   (lispm-finder--in
     (cond ((null name) nil)
           ((stringp lispm-finder--directory)
-           (let ((file (expand-file-name name lispm-finder--directory)))
+           (let ((file (lispm-finder--child-path name lispm-finder--directory)))
              (lambda ()
                (move-file-to-trash file)
                (when lispm-finder-trash-changed-function
@@ -995,8 +1001,8 @@ PROPS returns the text properties of an item, by name.  Return the columns."
   (let ((clean (lispm-finder--validate-item-name name)))
     (lispm-finder--in
       (when lispm-finder--selected
-        (rename-file (expand-file-name lispm-finder--selected lispm-finder--directory)
-                     (expand-file-name clean lispm-finder--directory))
+        (rename-file (lispm-finder--child-path lispm-finder--selected lispm-finder--directory)
+                     (lispm-finder--child-path clean lispm-finder--directory))
         (lispm-finder--go lispm-finder--directory nil clean)))))
 
 ;;;; Selecting
@@ -1317,11 +1323,11 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
     (cond
      ((lispm-finder--directory-only-p)
       (let ((path (if (and item (cdr item))
-                      (file-name-as-directory (expand-file-name (car item) lispm-finder--directory))
+                      (file-name-as-directory (lispm-finder--child-path (car item) lispm-finder--directory))
                     lispm-finder--directory)))
         (and (stringp path) (file-directory-p path) path)))
      ((and item (not (cdr item)))
-      (let ((path (expand-file-name (car item) lispm-finder--directory)))
+      (let ((path (lispm-finder--child-path (car item) lispm-finder--directory)))
         (and (file-exists-p path)
              (not (file-directory-p path))
              (or (null lispm-finder--predicate)
@@ -1541,13 +1547,16 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
             (cdr cancel-slice)
             (cdr choose-slice))))
 
+(defvar-local lispm-finder--choose-depth nil
+  "Recursion depth when this modal chooser entered `recursive-edit'.")
+
 (defun lispm-finder-choose-open-selected ()
   "Enter the selected subfolder in chooser mode."
   (interactive)
   (lispm-finder--in
     (when-let* ((item (lispm-finder--selected-item))
                 ((cdr item)))
-      (lispm-finder--go (expand-file-name (car item) lispm-finder--directory) t))))
+      (lispm-finder--go (lispm-finder--child-path (car item) lispm-finder--directory) t))))
 
 (defun lispm-finder-choose-open-or-confirm (&optional double-click)
   "Open a selected folder on DOUBLE-CLICK (or in file mode), else confirm choice."
@@ -1556,7 +1565,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
     (let ((item (lispm-finder--selected-item)))
       (cond
        ((and item (cdr item) (or double-click (not (lispm-finder--directory-only-p))))
-        (lispm-finder--go (expand-file-name (car item) lispm-finder--directory) t))
+        (lispm-finder--go (lispm-finder--child-path (car item) lispm-finder--directory) t))
        (t
         (lispm-finder-choose-confirm))))))
 
@@ -1567,11 +1576,12 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
     (let ((item (lispm-finder--selected-item)))
       (cond
        ((and (not (lispm-finder--directory-only-p)) item (cdr item))
-        (lispm-finder--go (expand-file-name (car item) lispm-finder--directory) t))
+        (lispm-finder--go (lispm-finder--child-path (car item) lispm-finder--directory) t))
        (t
         (when-let* ((target (lispm-finder--choose-target-path)))
           (setq lispm-finder--choose-result target)
-          (when (> (recursion-depth) 0)
+          (when (and lispm-finder--choose-depth
+                     (> (recursion-depth) lispm-finder--choose-depth))
             (exit-recursive-edit))))))))
 
 (defun lispm-finder-choose-cancel ()
@@ -1579,7 +1589,8 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
   (interactive)
   (lispm-finder--in
     (setq lispm-finder--choose-result 'cancel)
-    (when (> (recursion-depth) 0)
+    (when (and lispm-finder--choose-depth
+               (> (recursion-depth) lispm-finder--choose-depth))
       (exit-recursive-edit))))
 
 (defun lispm-finder-choose-go-home ()
@@ -1638,45 +1649,54 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
          (top (max 0 (/ (- ph height) 3)))
          (after-make-frame-functions nil)
          (before-make-frame-hook nil)
-         (frame (make-frame
-                 `((parent-frame . ,parent)
-                   (minibuffer . ,(minibuffer-window parent))
-                   (name . ,title)
-                   (undecorated . t)
-                   (user-position . t)
-                   (left . ,left)
-                   (top . ,top)
-                   (width . (text-pixels . ,width))
-                   (height . (text-pixels . ,height))
-                   (internal-border-width . 1)
-                   (child-frame-border-width . 1)
-                   (menu-bar-lines . 0)
-                   (tool-bar-lines . 0)
-                   (tab-bar-lines . 0)
-                   (no-other-frame . t)
-                   (skip-taskbar . t)
-                   (desktop-dont-save . t)
-                   (visibility . t)))))
-    (when-let* ((outline (lispm-ui-color :outline)))
-      (set-face-attribute 'child-frame-border frame :background outline)
-      (set-face-attribute 'internal-border frame :background outline))
-    (let ((win (frame-root-window frame)))
-      (set-window-buffer win buffer)
-      (set-window-dedicated-p win t)
-      (set-window-fringes win 0 0)
-      (with-current-buffer buffer
-        (setq-local tab-line-format `(:eval (lispm-finder--modal-title-bar ,title)))
-        (face-remap-add-relative 'tab-line '(:box nil :underline nil :overline nil))))
-    (raise-frame frame)
-    (select-frame-set-input-focus frame)
-    (select-window (frame-root-window frame))
-    (lambda ()
-      (when (frame-live-p frame)
-        (delete-frame frame t))
-      (when (frame-live-p parent)
-        (select-frame-set-input-focus parent))
-      (when (window-live-p prev-window)
-        (select-window prev-window)))))
+         (frame nil)
+         (ok nil)
+         (cleanup
+          (lambda ()
+            (when (frame-live-p frame)
+              (delete-frame frame t))
+            (when (frame-live-p parent)
+              (select-frame-set-input-focus parent))
+            (when (window-live-p prev-window)
+              (select-window prev-window)))))
+    (unwind-protect
+        (progn
+          (setq frame (make-frame
+                       `((parent-frame . ,parent)
+                         (minibuffer . ,(minibuffer-window parent))
+                         (name . ,title)
+                         (undecorated . t)
+                         (user-position . t)
+                         (left . ,left)
+                         (top . ,top)
+                         (width . (text-pixels . ,width))
+                         (height . (text-pixels . ,height))
+                         (internal-border-width . 1)
+                         (child-frame-border-width . 1)
+                         (menu-bar-lines . 0)
+                         (tool-bar-lines . 0)
+                         (tab-bar-lines . 0)
+                         (no-other-frame . t)
+                         (skip-taskbar . t)
+                         (desktop-dont-save . t)
+                         (visibility . t))))
+          (when-let* ((outline (lispm-ui-color :outline)))
+            (set-face-attribute 'child-frame-border frame :background outline)
+            (set-face-attribute 'internal-border frame :background outline))
+          (let ((win (frame-root-window frame)))
+            (set-window-buffer win buffer)
+            (set-window-dedicated-p win t)
+            (set-window-fringes win 0 0)
+            (with-current-buffer buffer
+              (setq-local tab-line-format `(:eval (lispm-finder--modal-title-bar ,title)))
+              (face-remap-add-relative 'tab-line '(:box nil :underline nil :overline nil))))
+          (raise-frame frame)
+          (select-frame-set-input-focus frame)
+          (select-window (frame-root-window frame))
+          (setq ok t)
+          cleanup)
+      (unless ok
+        (funcall cleanup)))))
 
 ;;;###autoload
 (cl-defun lispm-finder-choose-file (&key title file directory predicate preview)
@@ -1699,24 +1719,26 @@ graphic display with a palette, falls back to the minibuffer."
                               (file-name-nondirectory file))))
     (if (not (lispm-ui-popup-graphic-p))
         (lispm-ui--choose-file-in-minibuffer title file directory predicate)
-      (let ((buffer (let ((existing (get-buffer lispm-finder-choose-buffer-name)))
-                      (if (and existing
-                               (buffer-local-value 'lispm-finder--choosing existing)
-                               (get-buffer-window existing t))
-                          (generate-new-buffer lispm-finder-choose-buffer-name)
-                        (get-buffer-create lispm-finder-choose-buffer-name))))
+      (let ((buffer nil)
             (cleanup nil)
             (result nil))
-        (with-current-buffer buffer
-          (lispm-finder-choose-mode)
-          (setq lispm-finder--predicate predicate
-                lispm-finder--choose-title title
-                lispm-finder--choose-result nil
-                lispm-finder--back nil
-                lispm-finder--forward nil)
-          (lispm-finder--go directory nil initial-select))
         (unwind-protect
             (progn
+              (setq buffer (let ((existing (get-buffer lispm-finder-choose-buffer-name)))
+                             (if (and existing
+                                      (buffer-local-value 'lispm-finder--choosing existing)
+                                      (get-buffer-window existing t))
+                                 (generate-new-buffer lispm-finder-choose-buffer-name)
+                               (get-buffer-create lispm-finder-choose-buffer-name))))
+              (with-current-buffer buffer
+                (lispm-finder-choose-mode)
+                (setq lispm-finder--predicate predicate
+                      lispm-finder--choose-title title
+                      lispm-finder--choose-result nil
+                      lispm-finder--choose-depth (recursion-depth)
+                      lispm-finder--back nil
+                      lispm-finder--forward nil)
+                (lispm-finder--go directory nil initial-select))
               (setq cleanup
                     (funcall (or lispm-finder-modal-show-function
                                  #'lispm-finder--modal-show-default)
@@ -1732,8 +1754,8 @@ graphic display with a palette, falls back to the minibuffer."
                   (quit nil)))
               (when (buffer-live-p buffer)
                 (setq result (buffer-local-value 'lispm-finder--choose-result buffer))))
-          (when cleanup
-            (funcall cleanup))
+          (when (functionp cleanup)
+            (ignore-errors (funcall cleanup)))
           (when (buffer-live-p buffer)
             (kill-buffer buffer)))
         (and (stringp result)

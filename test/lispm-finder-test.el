@@ -38,23 +38,32 @@
 
 (ert-deftest lispm-finder-test-icon-classification ()
   "Verify file and directory icon classification."
-  (should (equal (lispm-finder--icon-name "/tmp" '("src" . t)) "folder-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("init.el")) "document-lisp-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("README.md")) "document-markdown-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("README.org")) "document-org-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("main.py")) "document-code-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("photo.png")) "document-image-32"))
-  (should (equal (lispm-finder--icon-name "/tmp" '("unknown.xyz")) "document-32")))
+  (let ((tmp (make-temp-file "lispm-finder-icons-" t)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "src" tmp))
+          (make-directory (expand-file-name "repo" tmp))
+          (make-directory (expand-file-name "repo/.git" tmp))
+          (should (equal (lispm-finder--icon-name tmp '("src" . t)) "folder-32"))
+          (should (equal (lispm-finder--icon-name tmp '("repo" . t)) "folder-git-32"))
+          (should (equal (lispm-finder--icon-name tmp '("init.el")) "document-lisp-32"))
+          (should (equal (lispm-finder--icon-name tmp '("README.md")) "document-markdown-32"))
+          (should (equal (lispm-finder--icon-name tmp '("README.org")) "document-org-32"))
+          (should (equal (lispm-finder--icon-name tmp '("main.py")) "document-code-32"))
+          (should (equal (lispm-finder--icon-name tmp '("photo.png")) "document-image-32"))
+          (should (equal (lispm-finder--icon-name tmp '("unknown.xyz")) "document-32")))
+      (delete-directory tmp t))))
 
 (ert-deftest lispm-finder-test-icons-exist ()
-  "Every icon bundled by `lispm-finder' is resolved via `lispm-ui-icon-file'."
+  "Every icon bundled by `lispm-finder' is resolved and exists in its icon directory."
   (dolist (name '("disk" "document-32" "document-blank" "document-code-32"
                   "document-code" "document-image-32" "document-image"
                   "document-lisp-32" "document-lisp" "document-markdown-32"
                   "document-markdown" "document-org-32" "document-org"
                   "document" "folder-32" "folder-git-32" "folder-git"
                   "folder" "hard-disk-32"))
-    (should (file-readable-p (lispm-ui-icon-file name)))))
+    (should (file-readable-p (lispm-ui-icon-file name)))
+    (should (file-readable-p (expand-file-name (concat name ".svg") lispm-finder-icon-directory)))))
 
 ;;; Reading & Rendering
 
@@ -62,7 +71,7 @@
   "Verify `lispm-finder--read' and `lispm-finder--render' in a temp directory."
   (let ((tmp (make-temp-file "lispm-finder-test-" t)))
     (unwind-protect
-        (progn
+        (save-window-excursion
           (make-directory (expand-file-name "alpha-dir" tmp))
           (with-temp-file (expand-file-name "beta.txt" tmp)
             (insert "hello"))
@@ -90,14 +99,14 @@
               (should (equal found "alpha-dir")))))
       (delete-directory tmp t))))
 
-;;; Navigation
+;;; Navigation & File Operations
 
 (ert-deftest lispm-finder-test-navigation-history ()
   "Verify `lispm-finder--go', `lispm-finder-back', `lispm-finder-forward', and `lispm-finder-up'."
   (let* ((root (make-temp-file "lispm-finder-nav-" t))
          (sub (expand-file-name "sub" root)))
     (unwind-protect
-        (progn
+        (save-window-excursion
           (make-directory sub)
           (with-temp-buffer
             (set-window-buffer (selected-window) (current-buffer))
@@ -107,6 +116,7 @@
             (lispm-finder--render)
             (lispm-finder--go sub t)
             (should (equal lispm-finder--directory (file-name-as-directory sub)))
+            (should (equal default-directory (file-name-as-directory sub)))
             (should (equal (car lispm-finder--back) (file-name-as-directory root)))
             (lispm-finder-back)
             (should (equal lispm-finder--directory (file-name-as-directory root)))
@@ -117,13 +127,41 @@
             (should (equal lispm-finder--directory (file-name-as-directory root)))))
       (delete-directory root t))))
 
+(ert-deftest lispm-finder-test-tilde-and-refresh-reconcile ()
+  "Literal `~' filenames stay inside the directory, and refresh drops deleted selections."
+  (let ((tmp (make-temp-file "lispm-finder-tilde-" t)))
+    (unwind-protect
+        (save-window-excursion
+          (with-temp-file (lispm-finder--child-path "~" tmp)
+            (insert "tilde"))
+          (with-temp-file (lispm-finder--child-path "gone.txt" tmp)
+            (insert "gone"))
+          (should (equal (lispm-finder--child-path "~" tmp)
+                         (concat (file-name-as-directory (expand-file-name tmp)) "~")))
+          (with-temp-buffer
+            (set-window-buffer (selected-window) (current-buffer))
+            (lispm-finder-mode)
+            (lispm-finder--go tmp nil "gone.txt")
+            (should (equal lispm-finder--selected "gone.txt"))
+            (delete-file (lispm-finder--child-path "gone.txt" tmp))
+            (lispm-finder-refresh)
+            (should-not lispm-finder--selected)
+            (lispm-finder-new-folder "created-folder")
+            (should (file-directory-p (lispm-finder--child-path "created-folder" tmp)))
+            (should (equal lispm-finder--selected "created-folder"))
+            (lispm-finder-rename "renamed-folder")
+            (should (file-directory-p (lispm-finder--child-path "renamed-folder" tmp)))
+            (should (equal lispm-finder--selected "renamed-folder"))
+            (should-error (lispm-finder-new-folder "../escape") :type 'user-error)))
+      (delete-directory tmp t))))
+
 ;;; Chooser filtering and rendering
 
 (ert-deftest lispm-finder-test-chooser-render-and-filter ()
-  "Verify chooser mode filters files in directory-only mode and renders footer."
+  "Verify chooser mode filters files in directory-only mode and evaluates footer."
   (let ((tmp (make-temp-file "lispm-finder-chooser-" t)))
     (unwind-protect
-        (progn
+        (save-window-excursion
           (make-directory (expand-file-name "folder-a" tmp))
           (with-temp-file (expand-file-name "file-b.txt" tmp)
             (insert "content"))
@@ -136,7 +174,10 @@
             ;; In directory-only mode, only folder-a is listed
             (should (equal lispm-finder--items '(("folder-a" . t))))
             (should (> (buffer-size) 0))
-            (should mode-line-format)))
+            (should mode-line-format)
+            (should (stringp (lispm-finder--choose-footer)))
+            (should (equal (lispm-finder--choose-target-path)
+                           (file-name-as-directory (expand-file-name tmp))))))
       (delete-directory tmp t))))
 
 (ert-deftest lispm-finder-test-ui-choose-file-registration ()
