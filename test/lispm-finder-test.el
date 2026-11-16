@@ -194,8 +194,15 @@
       (delete-directory tmp t))))
 
 (ert-deftest lispm-finder-test-ui-choose-file-registration ()
-  "Loading `lispm-finder' sets `lispm-ui-choose-file-function' to `lispm-finder-choose-file'."
-  (should (eq lispm-ui-choose-file-function #'lispm-finder-choose-file)))
+  "Loading `lispm-finder' sets `lispm-ui-choose-file-function' to `lispm-finder-choose-file'
+and exposes public aliases for external packages."
+  (should (eq lispm-ui-choose-file-function #'lispm-finder-choose-file))
+  (should (fboundp 'lispm-finder-path-items))
+  (should (fboundp 'lispm-finder-keyboard-menu))
+  (should (fboundp 'lispm-finder-choose-header))
+  (should (fboundp 'lispm-finder-choose-footer))
+  (should (fboundp 'lispm-finder-modal-show-default))
+  (should (boundp 'lispm-finder-directory)))
 
 (ert-deftest lispm-finder-test-svg-header-and-footer-drawing ()
   "Verify SVG header strip, bevel buttons, and chooser footer draw cleanly."
