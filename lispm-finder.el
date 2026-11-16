@@ -350,64 +350,65 @@ When TRAILING-PAD is non-nil, include trailing margin."
                  (lambda () (lispm-finder-draw-header-button lispm-ui-current-palette
                                                              label state trailing-pad))))))
 
-(unless (fboundp 'lispm-ui-press-target)
-  (defun lispm-ui-press-target (position)
-    "Return the press target at mouse POSITION, or nil."
-    (when-let* ((string (posn-string position))
-                ((stringp (car string)))
-                (index (cdr string))
-                ((and (integerp index) (<= 0 index) (< index (length (car string))))))
-      (seq-some (lambda (prop)
-                  (get-text-property index prop (car string)))
-                lispm-ui-target-properties))))
+(eval-and-compile
+  (unless (fboundp 'lispm-ui-press-target)
+    (defun lispm-ui-press-target (position)
+      "Return the press target at mouse POSITION, or nil."
+      (when-let* ((string (posn-string position))
+                  ((stringp (car string)))
+                  (index (cdr string))
+                  ((and (integerp index) (<= 0 index) (< index (length (car string))))))
+        (seq-some (lambda (prop)
+                    (get-text-property index prop (car string)))
+                  lispm-ui-target-properties))))
 
-(unless (fboundp 'lispm-ui-same-target-p)
-  (defun lispm-ui-same-target-p (position)
-    "Return a predicate true of mouse positions on the same target as POSITION."
-    (let ((window (posn-window position))
-          (area (posn-area position))
-          (target (lispm-ui-press-target position)))
-      (lambda (release)
-        (and target
-             (eq (posn-window release) window)
-             (eq (posn-area release) area)
-             (equal (lispm-ui-press-target release) target))))))
+  (unless (fboundp 'lispm-ui-same-target-p)
+    (defun lispm-ui-same-target-p (position)
+      "Return a predicate true of mouse positions on the same target as POSITION."
+      (let ((window (posn-window position))
+            (area (posn-area position))
+            (target (lispm-ui-press-target position)))
+        (lambda (release)
+          (and target
+               (eq (posn-window release) window)
+               (eq (posn-area release) area)
+               (equal (lispm-ui-press-target release) target))))))
 
-(unless (fboundp 'lispm-ui-pressed-p)
-  (defun lispm-ui-pressed-p (target &optional window)
-    "Return non-nil while TARGET is held down in WINDOW."
-    (and target
-         (equal (window-parameter (or window (selected-window)) 'lispm-ui-pressed) target))))
+  (unless (fboundp 'lispm-ui-pressed-p)
+    (defun lispm-ui-pressed-p (target &optional window)
+      "Return non-nil while TARGET is held down in WINDOW."
+      (and target
+           (equal (window-parameter (or window (selected-window)) 'lispm-ui-pressed) target))))
 
-(unless (fboundp 'lispm-ui-press)
-  (defun lispm-ui-press (position pressed-p command &optional target)
-    "Hold a control at POSITION pressed until the mouse button rises."
-    (let ((window (posn-window position))
-          (target (or target (lispm-ui-press-target position)))
-          (holding t))
-      (when (window-live-p window)
-        (when (unwind-protect
-                  (lispm-ui-modal-hold
-                   (lambda (event)
-                     (let ((over (and (window-live-p window)
-                                      (funcall pressed-p (event-end event)))))
-                       (when (lispm-ui-modal-mouse-up-p event)
-                         (setq holding nil))
-                       over))
-                   (lambda (in)
-                     (when (and holding (window-live-p window))
-                       (set-window-parameter window 'lispm-ui-pressed (and in target))
-                       (with-current-buffer (window-buffer window)
-                         (force-mode-line-update))
-                       (redisplay t))))
-                (when (window-live-p window)
-                  (set-window-parameter window 'lispm-ui-pressed nil)
-                  (with-current-buffer (window-buffer window)
-                    (force-mode-line-update))))
-          (when (window-live-p window)
-            (let ((lispm-ui-in-gui-action t))
-              (with-selected-window window
-                (funcall command)))))))))
+  (unless (fboundp 'lispm-ui-press)
+    (defun lispm-ui-press (position pressed-p command &optional target)
+      "Hold a control at POSITION pressed until the mouse button rises."
+      (let ((window (posn-window position))
+            (target (or target (lispm-ui-press-target position)))
+            (holding t))
+        (when (window-live-p window)
+          (when (unwind-protect
+                    (lispm-ui-modal-hold
+                     (lambda (event)
+                       (let ((over (and (window-live-p window)
+                                        (funcall pressed-p (event-end event)))))
+                         (when (lispm-ui-modal-mouse-up-p event)
+                           (setq holding nil))
+                         over))
+                     (lambda (in)
+                       (when (and holding (window-live-p window))
+                         (set-window-parameter window 'lispm-ui-pressed (and in target))
+                         (with-current-buffer (window-buffer window)
+                           (force-mode-line-update))
+                         (redisplay t))))
+                  (when (window-live-p window)
+                    (set-window-parameter window 'lispm-ui-pressed nil)
+                    (with-current-buffer (window-buffer window)
+                      (force-mode-line-update))))
+            (when (window-live-p window)
+              (let ((lispm-ui-in-gui-action t))
+                (with-selected-window window
+                  (funcall command))))))))))
 
 (defun lispm-finder--press-target (position)
   "Return the press target at POSITION."
