@@ -175,9 +175,22 @@
             (should (equal lispm-finder--items '(("folder-a" . t))))
             (should (> (buffer-size) 0))
             (should mode-line-format)
-            (should (stringp (lispm-finder--choose-footer)))
+            (let ((footer (lispm-finder--choose-footer)))
+              (should (stringp footer))
+              (should (text-property-any 0 (length footer)
+                                         'lispm-finder-target
+                                         lispm-finder--footer-new-folder-target
+                                         footer)))
             (should (equal (lispm-finder--choose-target-path)
-                           (file-name-as-directory (expand-file-name tmp))))))
+                           (file-name-as-directory (expand-file-name tmp))))
+            (cl-letf (((symbol-function 'read-string)
+                       (lambda (_prompt &optional _initial &rest _)
+                         "my-new-dir")))
+              (call-interactively #'lispm-finder-new-folder))
+            (should (equal lispm-finder--selected "my-new-dir"))
+            (should (equal (lispm-finder--choose-target-path)
+                           (file-name-as-directory
+                            (expand-file-name "my-new-dir" tmp))))))
       (delete-directory tmp t))))
 
 (ert-deftest lispm-finder-test-ui-choose-file-registration ()

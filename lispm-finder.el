@@ -905,11 +905,28 @@ PROPS returns the text properties of an item, by name.  Return the columns."
       (user-error (lispm-finder-tr "Nothing can be made or renamed in “%s”") (or name "")))
     trimmed))
 
+(defvar lispm-ui--intercepting)
+(declare-function lispm-ui-form-prompt "lispm-ui-form" (prompt &rest args))
+
+(defun lispm-finder--read-string (prompt &optional initial)
+  "Read a string with PROMPT and INITIAL input, using a modal form in GUI Finder."
+  (if (and (not noninteractive)
+           (fboundp 'lispm-ui-form-prompt)
+           (lispm-ui-popup-available-p)
+           (or lispm-finder--choosing (lispm-ui-gui-action-p)))
+      (lispm-ui-form-prompt prompt :initial initial)
+    (let ((lispm-ui--intercepting nil))
+      (read-string prompt initial))))
+
 (defun lispm-finder-new-folder (name)
   "Make a folder called NAME in the folder shown, and select it."
-  (interactive (progn (lispm-finder--real-only)
-                      (list (read-string (lispm-finder-tr "Name of the new folder: ")
-                                         (lispm-finder-tr "untitled folder")))))
+  (interactive
+   (let ((buf (lispm-finder--buffer)))
+     (with-current-buffer buf
+       (lispm-finder--real-only)
+       (list (lispm-finder--read-string
+              (lispm-finder-tr "Name of the new folder: ")
+              (lispm-finder-tr "untitled folder"))))))
   (lispm-finder--real-only)
   (let ((clean (lispm-finder--validate-item-name name)))
     (lispm-finder--in
@@ -994,9 +1011,13 @@ PROPS returns the text properties of an item, by name.  Return the columns."
 
 (defun lispm-finder-rename (name)
   "Rename the selected item to NAME."
-  (interactive (progn (lispm-finder--real-only)
-                      (list (read-string (lispm-finder-tr "Rename to: ")
-                                         (lispm-finder--in lispm-finder--selected)))))
+  (interactive
+   (let ((buf (lispm-finder--buffer)))
+     (with-current-buffer buf
+       (lispm-finder--real-only)
+       (list (lispm-finder--read-string
+              (lispm-finder-tr "Rename to: ")
+              (lispm-finder--in lispm-finder--selected))))))
   (lispm-finder--real-only)
   (let ((clean (lispm-finder--validate-item-name name)))
     (lispm-finder--in
@@ -1295,6 +1316,9 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
 (defconst lispm-finder--new-folder-target '(header-line lispm-finder-new-folder)
   "Target identifier for the New Folder button in chooser header.")
 
+(defconst lispm-finder--footer-new-folder-target '(mode-line lispm-finder-new-folder)
+  "Target identifier for the New Folder button in chooser footer.")
+
 (defconst lispm-finder--footer-open-target '(mode-line lispm-finder-choose-open)
   "Target identifier for the Open button in chooser footer.")
 
@@ -1493,6 +1517,12 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
          (item (lispm-finder--selected-item))
          (sel-folder (and item (cdr item)))
          (target-path (lispm-finder--choose-target-path))
+         (new-folder-slice (when (lispm-finder-real-p)
+                             (lispm-finder--footer-button-slice
+                              (lispm-finder-tr "New Folder…")
+                              lispm-finder--footer-new-folder-target
+                              (lambda () (call-interactively #'lispm-finder-new-folder))
+                              :enabled t)))
          (open-slice (when (and dir-only sel-folder)
                        (lispm-finder--footer-button-slice
                         (lispm-finder-tr "Open")
@@ -1515,7 +1545,8 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
                         :default t
                         :enabled choose-enabled
                         :trailing t))
-         (right-w (+ (or (car open-slice) 0)
+         (right-w (+ (or (car new-folder-slice) 0)
+                     (or (car open-slice) 0)
                      (car cancel-slice)
                      (car choose-slice)))
          (total-w (- (window-pixel-width) (window-right-divider-width)
@@ -1532,7 +1563,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
                      (max 40 (- left-w 20))))
          (left-str (if (lispm-finder--tty-p)
                        (propertize (truncate-string-to-width (concat " " abbrev)
-                                                             (max 1 (- (window-body-width) 24))
+                                                             (max 1 (- (window-body-width) 36))
                                                              nil nil "…")
                                    'face 'lispm-finder-toolbar)
                      (propertize " "
@@ -1543,6 +1574,7 @@ DIRECTORY is a directory's name, or a key of `lispm-finder-folders'."
                                              (lispm-finder--draw-footer-left
                                               lispm-ui-current-palette left-w path-text)))))))
     (concat left-str
+            (cdr new-folder-slice)
             (cdr open-slice)
             (cdr cancel-slice)
             (cdr choose-slice))))
