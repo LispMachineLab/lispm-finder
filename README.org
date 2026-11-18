@@ -1,5 +1,12 @@
 #+TITLE: lispm-finder — Classic Finder File Manager & Chooser for Emacs
 
+#+begin_quote
+*Archived — Merged into [[https://github.com/LispMachineLab/lispm-ui][lispm-ui]]:* Since ~lispm-ui~ 0.8.0, =lispm-finder.el=,
+=lispm-finder-i18n.el=, its translations and its icons live in
+[[https://github.com/LispMachineLab/lispm-ui][LispMachineLab/lispm-ui]].  Install ~lispm-ui~ (>= 0.8.0) and load ~(require 'lispm-finder)~ from
+there.  This repository is archived for historical reference.
+#+end_quote
+
 =lispm-finder= provides a classic Mac OS 9 / Platinum-styled spatial icon-grid
 Finder file manager and modal file/directory chooser for GNU Emacs, built on
 =lispm-kit= and =lispm-ui=.
